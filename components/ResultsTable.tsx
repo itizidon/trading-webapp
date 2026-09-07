@@ -126,7 +126,12 @@ export function ResultsTable({
         </div>
       </div>
 
-      <div className="results-table__scroller">
+      <div
+        className="results-table__scroller"
+        role="region"
+        aria-label="Return comparison results"
+        tabIndex={0}
+      >
         <table className="results-table__table">
           <caption className="results-table__caption">
             Algorithm results compared with the buy and hold benchmark. Select a
