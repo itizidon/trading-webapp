@@ -41,10 +41,10 @@ const BREAKOUT = `function strategy(bars, helpers) {
 
   for (let i = 21; i < bars.length; i += 1) {
     if (closes[i] > priorHigh[i - 1]) {
-      signals.push({ type: "BUY", date: bars[i].date, price: bars[i].close, reason: "20-session breakout" });
+      signals.push({ type: "BUY", date: bars[i].date, price: bars[i].close, reason: "20-bar breakout" });
     }
     if (closes[i] < trailingStop[i - 1]) {
-      signals.push({ type: "SELL", date: bars[i].date, price: bars[i].close, reason: "10-session trailing low" });
+      signals.push({ type: "SELL", date: bars[i].date, price: bars[i].close, reason: "10-bar trailing low" });
     }
   }
   return signals;
@@ -65,7 +65,7 @@ export const DEFAULT_STRATEGIES: StrategyDefinition[] = [
   {
     id: "sma-cross",
     name: "SMA Crossover",
-    description: "Follows medium-term trend shifts using 20 and 50-session averages.",
+    description: "Follows trend shifts using 20 and 50-bar averages.",
     color: STRATEGY_COLORS[0],
     code: SMA_CROSS,
     enabled: true,
@@ -81,7 +81,7 @@ export const DEFAULT_STRATEGIES: StrategyDefinition[] = [
   {
     id: "channel-breakout",
     name: "Channel Breakout",
-    description: "Buys 20-session highs and exits below the trailing 10-session low.",
+    description: "Buys 20-bar highs and exits below the trailing 10-bar low.",
     color: STRATEGY_COLORS[2],
     code: BREAKOUT,
     enabled: true,

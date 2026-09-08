@@ -17,7 +17,7 @@ const noCosts: RunSettings = {
 };
 
 describe("runBacktest", () => {
-  it("fills signals at the next session open rather than their trigger price", () => {
+  it("fills signals at the next candle open rather than their trigger price", () => {
     const signals: RawSignal[] = [
       { type: "BUY", date: "2025-01-02", price: 105 },
       { type: "SELL", date: "2025-01-06", price: 120 },
@@ -54,6 +54,43 @@ describe("runBacktest", () => {
     expect(result.metrics.totalReturnPct).toBe(7.2727);
     expect(result.metrics.completedTrades).toBe(1);
     expect(result.metrics.winRatePct).toBe(100);
+  });
+
+  it("fills same-day 15-minute signals at the next candle", () => {
+    const intradayBars: PriceBar[] = [
+      { date: "2025-01-02T14:30:00.000Z", open: 100, high: 102, low: 99, close: 101, volume: 1_000 },
+      { date: "2025-01-02T14:45:00.000Z", open: 103, high: 105, low: 102, close: 104, volume: 1_100 },
+      { date: "2025-01-02T15:00:00.000Z", open: 106, high: 108, low: 105, close: 107, volume: 1_200 },
+      { date: "2025-01-02T15:15:00.000Z", open: 105, high: 106, low: 103, close: 104, volume: 1_300 },
+    ];
+    const signals: RawSignal[] = [
+      { type: "BUY", date: intradayBars[0].date, price: intradayBars[0].close },
+      { type: "SELL", date: intradayBars[2].date, price: intradayBars[2].close },
+    ];
+
+    const result = runBacktest("intraday-next-candle", intradayBars, signals, noCosts);
+
+    expect(result.signals).toMatchObject([
+      {
+        date: "2025-01-02T14:30:00.000Z",
+        fillDate: "2025-01-02T14:45:00.000Z",
+        fillPrice: 103,
+        status: "FILLED",
+      },
+      {
+        date: "2025-01-02T15:00:00.000Z",
+        fillDate: "2025-01-02T15:15:00.000Z",
+        fillPrice: 105,
+        status: "FILLED",
+      },
+    ]);
+    expect(result.trades[0]).toMatchObject({
+      entryDate: "2025-01-02T14:45:00.000Z",
+      entryPrice: 103,
+      exitDate: "2025-01-02T15:15:00.000Z",
+      exitPrice: 105,
+      status: "CLOSED",
+    });
   });
 
   it("calculates an independent return for each strategy", () => {
@@ -114,7 +151,7 @@ describe("runBacktest", () => {
     ] as RawSignal[];
 
     expect(() => runBacktest("validation", bars, signals, noCosts)).toThrow(
-      "4 signal(s) had an unknown date",
+      "4 signal(s) had an unknown timestamp",
     );
   });
 
@@ -124,7 +161,7 @@ describe("runBacktest", () => {
     ] as unknown as RawSignal[];
 
     expect(() => runBacktest("metadata", bars, signals, noCosts)).toThrow(
-      "1 signal(s) had an unknown date, invalid action, invalid metadata",
+      "1 signal(s) had an unknown timestamp, invalid action, invalid metadata",
     );
   });
 
@@ -132,7 +169,7 @@ describe("runBacktest", () => {
     const signals = new Array(1) as RawSignal[];
 
     expect(() => runBacktest("sparse", bars, signals, noCosts)).toThrow(
-      "1 signal(s) had an unknown date",
+      "1 signal(s) had an unknown timestamp",
     );
   });
 
@@ -173,9 +210,9 @@ describe("runBacktest", () => {
     expect(result.metrics.totalReturnPct).toBe(5.6867);
   });
 
-  it("rejects a run without enough sessions or positive starting capital", () => {
+  it("rejects a run without enough candles or positive starting capital", () => {
     expect(() => runBacktest("short", bars.slice(0, 1), [], noCosts)).toThrow(
-      "At least two market sessions are required.",
+      "At least two market candles are required.",
     );
     expect(() =>
       runBacktest("capital", bars, [], { ...noCosts, startingCapital: 0 }),
@@ -185,7 +222,15 @@ describe("runBacktest", () => {
   it("rejects bars that are out of order or have inconsistent market fields", () => {
     const reversed = [bars[1], bars[0], ...bars.slice(2)];
     expect(() => runBacktest("order", reversed, [], noCosts)).toThrow(
-      "Market bars must have unique dates in chronological order.",
+      "Market bars must have unique timestamps in chronological order.",
+    );
+
+    const duplicateInstant = [
+      { ...bars[0], date: "2025-01-02" },
+      { ...bars[1], date: "2025-01-02T00:00:00.000Z" },
+    ];
+    expect(() => runBacktest("duplicate-time", duplicateInstant, [], noCosts)).toThrow(
+      "Market bars must have unique timestamps in chronological order.",
     );
 
     const invalidOhlc = bars.map((bar, index) => index === 1 ? { ...bar, high: bar.close - 1 } : bar);

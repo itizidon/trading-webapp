@@ -1,6 +1,6 @@
 # SignalForge
 
-SignalForge is a local-first stock strategy workbench. Add any number of JavaScript algorithms, run them against the same adjusted daily price history, and compare each algorithm's return, equity curve, drawdown, win rate, signals, and trades.
+SignalForge is a local-first stock strategy workbench. Add any number of JavaScript algorithms, run them against daily, hourly, 30-minute, or 15-minute price history, and compare each algorithm's return, equity curve, drawdown, win rate, signals, and trades.
 
 ## Run locally
 
@@ -44,17 +44,17 @@ The function receives the complete historical array to support vectorized indica
 
 - Long-only, all-in positions with fractional shares
 - Every strategy starts independently with $10,000
-- Signals are generated from data available at a session's close
-- Orders fill at the next session's split/dividend-adjusted open to avoid look-ahead bias
-- Open positions are marked to the final split/dividend-adjusted close
+- Signals are generated from data available at a bar's close
+- Orders fill at the next bar's open to avoid look-ahead bias
+- Open positions are marked to the final bar's close
 - Fees and slippage are currently set to zero
-- Buy-and-hold starts at the first session's open
-- Up to 400 calendar days are loaded before the selected window for indicator warmup
+- Buy-and-hold starts at the first bar's open
+- The route loads additional history before the selected window for indicator warmup, capped by each interval's provider retention limit
 - The selected algorithm shows BUY or SELL only when the latest completed bar creates a new next-open order; otherwise it shows HOLD for an open simulated position or WAIT while in cash
 
 ## Data
 
-The server route fetches daily OHLC history from Yahoo Finance's public chart endpoint, applies the adjusted-close ratio consistently to OHLC, and caches stable requests for 15 minutes. The resulting historical prices include split and dividend adjustments; volume remains unadjusted. That no-key source is suitable for personal research and demos, not redistribution or execution-grade production. The provider adapter is isolated in `app/api/market/route.ts` so it can be replaced with a licensed feed.
+The server route fetches daily and intraday OHLC history from Yahoo Finance's public chart endpoint. Daily prices use the adjusted-close ratio consistently across OHLC when the complete adjustment series is available; intraday candles use the provider's raw OHLC values. Volume is unadjusted. Yahoo currently limits 15- and 30-minute history to 60 days and hourly history to 730 days, so the UI disables duration combinations outside those windows. This no-key source is suitable for personal research and demos, not redistribution or execution-grade production. The provider adapter is isolated in `app/api/market/route.ts` so it can be replaced with a licensed feed.
 
 Backtests are hypothetical and are not investment advice.
 # trading-webapp

@@ -3,6 +3,18 @@
 const MAX_CODE_LENGTH = 50_000;
 const MAX_REASON_LENGTH = 180;
 
+function isIsoMarketTime(value) {
+  if (typeof value !== "string") return false;
+
+  const isDate = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const isUtcDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value);
+  if (!isDate && !isUtcDateTime) return false;
+
+  const normalized = isDate ? `${value}T00:00:00.000Z` : value;
+  const parsed = new Date(normalized);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === normalized;
+}
+
 function assertIndicatorInput(values, period, helperName) {
   if (!Array.isArray(values)) {
     throw new Error(`${helperName}() expects an array of finite numbers.`);
@@ -128,8 +140,8 @@ self.onmessage = (event) => {
       if (signal.type !== "BUY" && signal.type !== "SELL") {
         throw new Error(`Signal ${index + 1} must have a BUY or SELL type.`);
       }
-      if (typeof signal.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(signal.date)) {
-        throw new Error(`Signal ${index + 1} must have an ISO date.`);
+      if (!isIsoMarketTime(signal.date)) {
+        throw new Error(`Signal ${index + 1} must have an ISO date or UTC datetime.`);
       }
       if (!Number.isFinite(signal.price) || signal.price <= 0) {
         throw new Error(`Signal ${index + 1} must have a finite, positive trigger price.`);

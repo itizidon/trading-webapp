@@ -14,26 +14,35 @@ const round = (value: number, digits = 2) => {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 };
 
-function isIsoDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+function marketTimestamp(value: unknown) {
+  if (typeof value !== "string") return null;
+
+  const isDate = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const isUtcDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value);
+  if (!isDate && !isUtcDateTime) return null;
+
+  const normalized = isDate ? `${value}T00:00:00.000Z` : value;
+  const parsed = new Date(normalized);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === normalized
+    ? parsed.getTime()
+    : null;
 }
 
 function validateBars(bars: PriceBar[]) {
-  let previousDate = "";
+  let previousTimestamp: number | null = null;
 
   bars.forEach((bar, index) => {
     if (!bar || typeof bar !== "object") {
       throw new Error(`Market bar ${index + 1} is invalid.`);
     }
-    if (!isIsoDate(bar.date)) {
-      throw new Error(`Market bar ${index + 1} must have a valid ISO date.`);
+    const timestamp = marketTimestamp(bar.date);
+    if (timestamp === null) {
+      throw new Error(`Market bar ${index + 1} must have a valid ISO date or UTC datetime.`);
     }
-    if (previousDate && bar.date <= previousDate) {
-      throw new Error("Market bars must have unique dates in chronological order.");
+    if (previousTimestamp !== null && timestamp <= previousTimestamp) {
+      throw new Error("Market bars must have unique timestamps in chronological order.");
     }
-    previousDate = bar.date;
+    previousTimestamp = timestamp;
 
     if (![bar.open, bar.high, bar.low, bar.close].every((value) => Number.isFinite(value) && value > 0)) {
       throw new Error("Market bars must contain finite, positive prices.");
@@ -121,7 +130,7 @@ export function runBacktest(
   rawSignals: RawSignal[],
   settings: RunSettings,
 ): BacktestResult {
-  if (bars.length < 2) throw new Error("At least two market sessions are required.");
+  if (bars.length < 2) throw new Error("At least two market candles are required.");
   if (!Number.isFinite(settings.startingCapital) || settings.startingCapital <= 0) {
     throw new Error("Starting capital must be greater than zero.");
   }
@@ -137,7 +146,7 @@ export function runBacktest(
   const { signals, invalidCount } = normalizeSignals(rawSignals, bars);
   if (invalidCount > 0) {
     throw new Error(
-      `${invalidCount} signal(s) had an unknown date, invalid action, invalid metadata, or a trigger price outside that session's range.`,
+      `${invalidCount} signal(s) had an unknown timestamp, invalid action, invalid metadata, or a trigger price outside that candle's range.`,
     );
   }
   const signalsByBar = new Map<number, TradeSignal[]>();
@@ -151,7 +160,7 @@ export function runBacktest(
   let shares = 0;
   let openEntry: { date: string; price: number; quantity: number; fee: number } | null = null;
   let pending: TradeSignal | null = null;
-  let daysInMarket = 0;
+  let barsInMarket = 0;
   let peak = settings.startingCapital;
   let maxDrawdownPct = 0;
   const trades: CompletedTrade[] = [];
@@ -202,7 +211,7 @@ export function runBacktest(
       pending = null;
     }
 
-    if (shares > 0) daysInMarket += 1;
+    if (shares > 0) barsInMarket += 1;
     const value = cash + shares * bar.close;
     peak = Math.max(peak, value);
     const drawdown = peak > 0 ? ((value / peak) - 1) * 100 : 0;
@@ -252,7 +261,7 @@ export function runBacktest(
     winRatePct: closedTrades.length ? round((winners / closedTrades.length) * 100, 2) : null,
     completedTrades: closedTrades.length,
     totalSignals: signals.length,
-    exposurePct: round((daysInMarket / bars.length) * 100, 2),
+    exposurePct: round((barsInMarket / bars.length) * 100, 2),
   };
 
   return { strategyId, signals, trades, equity, metrics };

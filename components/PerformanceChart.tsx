@@ -6,6 +6,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type {
   BacktestResult,
   EquityPoint,
+  IntervalKey,
   PriceBar,
   StrategyDefinition,
 } from "@/lib/types";
@@ -23,6 +24,8 @@ export interface PerformanceChartProps {
   benchmark: EquityPoint[];
   initialMode?: ChartMode;
   currency?: string;
+  interval?: IntervalKey;
+  timeZone?: string;
   className?: string;
 }
 
@@ -44,6 +47,7 @@ const MARGIN = { top: 22, right: 22, bottom: 42, left: 68 };
 const PLOT_WIDTH = WIDTH - MARGIN.left - MARGIN.right;
 const PLOT_HEIGHT = HEIGHT - MARGIN.top - MARGIN.bottom;
 const BENCHMARK_ID = "__buy-and-hold__";
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const FALLBACK_COLORS = [
   "#8b7cff",
   "#2dd4bf",
@@ -60,10 +64,21 @@ function classes(...values: Array<string | false | null | undefined>) {
 }
 
 function timestampFor(date: string) {
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(date)
+  const normalized = DATE_ONLY_PATTERN.test(date)
     ? `${date}T00:00:00Z`
     : date;
   return Date.parse(normalized);
+}
+
+function makeDateFormatter(
+  options: Intl.DateTimeFormatOptions,
+  timeZone: string,
+) {
+  try {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone });
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" });
+  }
 }
 
 function toPoints(points: EquityPoint[]): PlottablePoint[] {
@@ -180,6 +195,8 @@ export default function PerformanceChart({
   benchmark,
   initialMode = "return",
   currency = "USD",
+  interval = "1d",
+  timeZone = "UTC",
   className,
 }: PerformanceChartProps) {
   const externalSelection =
@@ -302,24 +319,44 @@ export default function PerformanceChart({
   }, [timeline]);
 
   const rangeInDays = (xMax - xMin) / 86_400_000;
+  const hasIntradayTimestamps =
+    interval !== "1d" &&
+    (bars.some((bar) => !DATE_ONLY_PATTERN.test(bar.date)) ||
+      series.some((item) => item.points.some((point) => !DATE_ONLY_PATTERN.test(point.date))));
   const dateFormatter = useMemo(
-    () =>
-      new Intl.DateTimeFormat("en-US", {
+    () => {
+      if (hasIntradayTimestamps) {
+        return makeDateFormatter({
+          ...(rangeInDays >= 1
+            ? { month: "short" as const, day: "numeric" as const }
+            : {}),
+          hour: "numeric",
+          minute: "2-digit",
+        }, timeZone);
+      }
+
+      return makeDateFormatter({
         month: "short",
         ...(rangeInDays < 180 ? { day: "numeric" as const } : { year: "2-digit" as const }),
-        timeZone: "UTC",
-      }),
-    [rangeInDays],
+      }, "UTC");
+    },
+    [hasIntradayTimestamps, rangeInDays, timeZone],
   );
   const tooltipDateFormatter = useMemo(
     () =>
-      new Intl.DateTimeFormat("en-US", {
+      makeDateFormatter({
         month: "short",
         day: "numeric",
         year: "numeric",
-        timeZone: "UTC",
-      }),
-    [],
+        ...(hasIntradayTimestamps
+          ? {
+              hour: "numeric" as const,
+              minute: "2-digit" as const,
+              timeZoneName: "short" as const,
+            }
+          : {}),
+      }, hasIntradayTimestamps ? timeZone : "UTC"),
+    [hasIntradayTimestamps, timeZone],
   );
 
   const visibleHoverSeries = useMemo(() => {
@@ -344,7 +381,7 @@ export default function PerformanceChart({
         });
 
   const hoverX = hoverTimestamp === null ? null : xScale(hoverTimestamp);
-  const tooltipWidth = 238;
+  const tooltipWidth = hasIntradayTimestamps ? 300 : 238;
   const overflowCount = Math.max(0, visibleSeries.length - tooltipRows.length);
   const tooltipHeight = 48 + tooltipRows.length * 21 + (overflowCount ? 19 : 0);
   const tooltipX =

@@ -22,7 +22,7 @@ function sampleBars(): PriceBar[] {
   });
 }
 
-function executeInWorker(code: string) {
+function executeInWorker(code: string, bars = sampleBars()) {
   const messages: unknown[] = [];
   const sandbox = {
     self: {
@@ -33,7 +33,7 @@ function executeInWorker(code: string) {
   const worker = sandbox.self as typeof sandbox.self & {
     onmessage: (event: { data: { runId: string; code: string; bars: PriceBar[] } }) => void;
   };
-  worker.onmessage({ data: { runId: "test-run", code, bars: sampleBars() } });
+  worker.onmessage({ data: { runId: "test-run", code, bars } });
   return messages[0] as { runId: string; ok: boolean; signals?: unknown[]; error?: string };
 }
 
@@ -90,6 +90,22 @@ describe("strategy worker", () => {
       price: sampleBars()[0].close,
       reason: "x".repeat(180),
     }]);
+  });
+
+  it("accepts canonical UTC datetimes copied from intraday bars", () => {
+    const intradayBars: PriceBar[] = [
+      { date: "2025-01-02T14:30:00.000Z", open: 100, high: 102, low: 99, close: 101, volume: 1_000 },
+      { date: "2025-01-02T14:45:00.000Z", open: 103, high: 105, low: 102, close: 104, volume: 1_100 },
+    ];
+    const response = executeInWorker(`function strategy(bars) {
+      return bars.map((bar) => ({ type: "BUY", date: bar.date, price: bar.close }));
+    }`, intradayBars);
+
+    expect(response.ok, response.error).toBe(true);
+    expect(response.signals).toEqual([
+      { type: "BUY", date: "2025-01-02T14:30:00.000Z", price: 101 },
+      { type: "BUY", date: "2025-01-02T14:45:00.000Z", price: 104 },
+    ]);
   });
 
   it("gives a useful error for an invalid indicator period", () => {

@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { MarketDataResponse, PriceBar, RangeKey } from "@/lib/types";
+import {
+  INTERVAL_OPTIONS,
+  intervalLabel,
+  isIntervalKey,
+  isRangeKey,
+  isRangeSupported,
+  marketHistoryConfig,
+  nearestSupportedRange,
+} from "../../../lib/market-options";
+import type { IntervalKey, MarketDataResponse, PriceBar } from "../../../lib/types";
 
 export const runtime = "nodejs";
 
-const RANGE_DAYS: Record<RangeKey, number> = {
-  "1M": 31,
-  "3M": 93,
-  "6M": 186,
-  "1Y": 366,
-  "3Y": 1096,
-  "5Y": 1827,
-};
+const DAY_MS = 86_400_000;
+const INTRADAY_REQUEST_ALIGNMENT_MS = 15 * 60_000;
 
 type YahooChart = {
   chart?: {
@@ -21,6 +24,13 @@ type YahooChart = {
         exchangeName?: string;
         timezone?: string;
         exchangeTimezoneName?: string;
+        dataGranularity?: string;
+        currentTradingPeriod?: {
+          regular?: {
+            start?: number;
+            end?: number;
+          };
+        };
       };
       timestamp?: number[];
       indicators?: {
@@ -42,27 +52,93 @@ function isoDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
-async function fetchChart(url: string) {
+function marketTime(date: Date, interval: IntervalKey) {
+  return interval === "1d" ? isoDate(date) : date.toISOString();
+}
+
+function subtractDays(date: Date, days: number) {
+  return new Date(date.getTime() - days * DAY_MS);
+}
+
+function requestBoundary(now: Date, interval: IntervalKey) {
+  if (interval === "1d") {
+    const boundary = new Date(now);
+    boundary.setUTCHours(0, 0, 0, 0);
+    return boundary;
+  }
+
+  return new Date(
+    Math.floor(now.getTime() / INTRADAY_REQUEST_ALIGNMENT_MS) *
+      INTRADAY_REQUEST_ALIGNMENT_MS,
+  );
+}
+
+function isCompletedIntradayBar(
+  timestamp: number,
+  intervalMs: number,
+  periodEndMs: number,
+  regularPeriod?: { start?: number; end?: number },
+) {
+  const startedAt = timestamp * 1000;
+  let completedAt = startedAt + intervalMs;
+
+  if (
+    regularPeriod?.start != null &&
+    regularPeriod.end != null &&
+    timestamp >= regularPeriod.start
+  ) {
+    // Yahoo can append a zero-duration quote stamped exactly at the regular
+    // close. It is not an interval candle and must never become a signal bar.
+    if (timestamp >= regularPeriod.end) return false;
+    completedAt = Math.min(completedAt, regularPeriod.end * 1000);
+  }
+
+  return completedAt <= periodEndMs;
+}
+
+function warningFor(
+  interval: IntervalKey,
+  adjusted: boolean,
+  warmupDays: number,
+) {
+  const priceWarning = adjusted
+    ? "Prices include split and dividend adjustments; volume is unadjusted."
+    : interval === "1d"
+      ? "Adjusted history was incomplete, so raw prices are used consistently."
+      : "Yahoo Finance intraday candles do not include adjusted-close history, so raw OHLC prices and volume are used.";
+  const warmupWarning = warmupDays < 400
+    ? ` Indicator warmup is limited to ${warmupDays} calendar days by the provider's history window.`
+    : "";
+  return `${priceWarning}${warmupWarning}`;
+}
+
+async function fetchChart(urls: readonly string[], revalidate: number) {
   let lastStatus = 503;
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < urls.length; attempt += 1) {
     try {
-      const response = await fetch(url, {
+      const response = await fetch(urls[attempt], {
         headers: {
           Accept: "application/json",
           "User-Agent": "Mozilla/5.0 SignalForge/1.0",
         },
-        next: { revalidate: 900 },
+        next: { revalidate },
         signal: AbortSignal.timeout(9000),
       });
       lastStatus = response.status;
-      if (response.ok || response.status === 404) return response;
+      if (
+        response.ok ||
+        (response.status >= 400 && response.status < 500 && response.status !== 429)
+      ) {
+        return response;
+      }
       await response.body?.cancel();
-      if (response.status !== 429 && response.status < 500) break;
     } catch (error) {
       lastError = error;
     }
-    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+    if (attempt < urls.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
   if (lastError) throw lastError;
   throw new Error(`Market data provider returned ${lastStatus}.`);
@@ -70,52 +146,102 @@ async function fetchChart(url: string) {
 
 export async function GET(request: NextRequest) {
   const symbol = (request.nextUrl.searchParams.get("symbol") || "").trim().toUpperCase();
-  const range = (request.nextUrl.searchParams.get("range") || "1Y") as RangeKey;
+  const requestedRange = request.nextUrl.searchParams.get("range") || "1Y";
+  const requestedInterval = request.nextUrl.searchParams.get("interval") || "1d";
 
   if (!/^[A-Z0-9.^=-]{1,15}$/.test(symbol)) {
     return NextResponse.json({ error: "Enter a valid ticker such as AAPL or BRK-B." }, { status: 400 });
   }
-  if (!Object.hasOwn(RANGE_DAYS, range)) {
+  if (!isRangeKey(requestedRange)) {
     return NextResponse.json({ error: "Unsupported duration." }, { status: 400 });
   }
+  if (!isIntervalKey(requestedInterval)) {
+    const choices = INTERVAL_OPTIONS.map((option) => option.label).join(", ");
+    return NextResponse.json(
+      { error: `Unsupported interval. Choose ${choices}.` },
+      { status: 400 },
+    );
+  }
 
-  // Fixed UTC boundaries keep the upstream cache key stable and omit today's partial candle.
-  const periodEnd = new Date();
-  periodEnd.setUTCHours(0, 0, 0, 0);
-  const periodStart = new Date(periodEnd);
-  periodStart.setUTCDate(periodStart.getUTCDate() - RANGE_DAYS[range]);
-  const fetchStart = new Date(periodStart);
-  // Roughly 280 sessions of warmup supports common long-lookback indicators.
-  fetchStart.setUTCDate(fetchStart.getUTCDate() - 400);
+  const range = requestedRange;
+  const interval = requestedInterval;
+  if (!isRangeSupported(interval, range)) {
+    const nearestRange = nearestSupportedRange(interval, range);
+    return NextResponse.json(
+      {
+        error: `${range} is unavailable for ${intervalLabel(interval)} candles. Choose ${nearestRange} or a longer interval.`,
+      },
+      { status: 400 },
+    );
+  }
+
+  const history = marketHistoryConfig(interval, range);
+  const now = new Date();
+  // Daily requests stay fixed at UTC midnight. Intraday requests advance on
+  // quarter-hour boundaries, keeping cache keys stable without dropping today.
+  const periodEnd = requestBoundary(now, interval);
+  const periodStart = subtractDays(periodEnd, history.rangeDays);
+  const fetchStart = subtractDays(periodEnd, history.historyDays);
 
   const params = new URLSearchParams({
     period1: String(Math.floor(fetchStart.getTime() / 1000)),
     period2: String(Math.floor(periodEnd.getTime() / 1000)),
-    interval: "1d",
+    interval,
     events: "div,splits",
     includeAdjustedClose: "true",
   });
-  const endpoint = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`;
+  const endpoints = ["query2", "query1"].map(
+    (host) => `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`,
+  );
 
   try {
-    const response = await fetchChart(endpoint);
+    const response = await fetchChart(endpoints, history.cacheSeconds);
     const payload = (await response.json()) as YahooChart;
     const result = payload.chart?.result?.[0];
-    if (!result || payload.chart?.error) {
+    if (!response.ok || !result || payload.chart?.error) {
+      const providerStatus = response.status >= 400 && response.status < 500
+        ? response.status
+        : 502;
       return NextResponse.json(
         { error: payload.chart?.error?.description || `No market data found for ${symbol}.` },
-        { status: 404 },
+        { status: providerStatus },
       );
     }
 
     const quote = result.indicators?.quote?.[0];
     const adjusted = result.indicators?.adjclose?.[0]?.adjclose;
     const timestamps = result.timestamp ?? [];
-    if (!quote || timestamps.length < 2) {
-      return NextResponse.json({ error: `Not enough daily history for ${symbol}.` }, { status: 422 });
+    if (!quote) {
+      return NextResponse.json(
+        { error: `Not enough ${intervalLabel(interval).toLowerCase()} history for ${symbol}.` },
+        { status: 422 },
+      );
     }
 
-    const hasCompleteAdjustedSeries = timestamps.every((_, index) => {
+    const regularPeriod = result.meta?.currentTradingPeriod?.regular;
+    const includedIndices = timestamps.flatMap((timestamp, index) => {
+      if (!Number.isFinite(timestamp) || timestamp <= 0) return [];
+      if (interval === "1d") {
+        return timestamp * 1000 < periodEnd.getTime() ? [index] : [];
+      }
+      return isCompletedIntradayBar(
+        timestamp,
+        history.intervalMs,
+        periodEnd.getTime(),
+        regularPeriod,
+      )
+        ? [index]
+        : [];
+    });
+
+    if (includedIndices.length < 2) {
+      return NextResponse.json(
+        { error: `Not enough completed ${intervalLabel(interval).toLowerCase()} history for ${symbol}.` },
+        { status: 422 },
+      );
+    }
+
+    const hasCompleteAdjustedSeries = includedIndices.every((index) => {
       const rawClose = quote.close?.[index];
       if (rawClose == null) return true;
       const adjustedClose = adjusted?.[index];
@@ -123,7 +249,7 @@ export async function GET(request: NextRequest) {
     });
 
     const bars: PriceBar[] = [];
-    for (let index = 0; index < timestamps.length; index += 1) {
+    for (const index of includedIndices) {
       const rawOpen = quote.open?.[index];
       const rawHigh = quote.high?.[index];
       const rawLow = quote.low?.[index];
@@ -138,7 +264,7 @@ export async function GET(request: NextRequest) {
 
       const factor = rawClose === 0 ? 1 : adjustedClose / rawClose;
       const bar = {
-        date: new Date(timestamps[index] * 1000).toISOString().slice(0, 10),
+        date: marketTime(new Date(timestamps[index] * 1000), interval),
         open: rawOpen * factor,
         high: rawHigh * factor,
         low: rawLow * factor,
@@ -154,30 +280,35 @@ export async function GET(request: NextRequest) {
 
     const uniqueBars = Array.from(new Map(bars.map((bar) => [bar.date, bar])).values())
       .sort((a, b) => a.date.localeCompare(b.date));
-    const selectedBars = uniqueBars.filter((bar) => bar.date >= isoDate(periodStart));
+    const formattedPeriodStart = marketTime(periodStart, interval);
+    const selectedBars = uniqueBars.filter((bar) => bar.date >= formattedPeriodStart);
     if (selectedBars.length < 2) {
-      return NextResponse.json({ error: `Not enough data in the selected ${range} period.` }, { status: 422 });
+      return NextResponse.json(
+        { error: `Not enough completed ${intervalLabel(interval).toLowerCase()} data in the selected ${range} period.` },
+        { status: 422 },
+      );
     }
 
     const body: MarketDataResponse = {
       symbol: result.meta?.symbol || symbol,
+      interval,
       bars: uniqueBars,
-      periodStart: isoDate(periodStart),
+      periodStart: formattedPeriodStart,
       meta: {
         currency: result.meta?.currency || "USD",
         exchange: result.meta?.exchangeName || "Market",
         timezone: result.meta?.exchangeTimezoneName || result.meta?.timezone || "America/New_York",
         provider: "Yahoo Finance",
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: now.toISOString(),
         adjusted: hasCompleteAdjustedSeries,
-        warning: hasCompleteAdjustedSeries
-          ? "Prices include split and dividend adjustments; volume is unadjusted."
-          : "Adjusted history was incomplete, so raw prices are used consistently.",
+        warning: warningFor(interval, hasCompleteAdjustedSeries, history.warmupDays),
       },
     };
 
     return NextResponse.json(body, {
-      headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=86400" },
+      headers: {
+        "Cache-Control": `public, s-maxage=${history.cacheSeconds}, stale-while-revalidate=${history.staleWhileRevalidateSeconds}`,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Market data is temporarily unavailable.";

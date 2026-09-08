@@ -1,5 +1,7 @@
 export type RangeKey = "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
+export type IntervalKey = "1d" | "15m" | "30m" | "1h";
+
 export type SignalType = "BUY" | "SELL";
 
 export interface PriceBar {
@@ -74,6 +76,7 @@ export interface StrategyDefinition {
 
 export interface MarketDataResponse {
   symbol: string;
+  interval: IntervalKey;
   bars: PriceBar[];
   periodStart: string;
   meta: {

@@ -335,9 +335,9 @@ main {
   background: linear-gradient(105deg, rgba(255, 255, 255, 0.025), transparent 40%), var(--panel);
   box-shadow: 0 16px 45px rgba(0, 0, 0, 0.16);
   display: grid;
-  grid-template-columns: minmax(140px, 0.9fr) 1px minmax(300px, 1.7fr) 1px minmax(110px, 0.75fr) 1px minmax(90px, 0.65fr) auto;
+  grid-template-columns: minmax(125px, .65fr) 1px minmax(185px, 1fr) 1px minmax(260px, 1.4fr) 1px minmax(100px, .55fr) 1px minmax(80px, .45fr) auto;
   align-items: center;
-  gap: 17px;
+  gap: 13px;
 }
 
 .runbar label > span,
@@ -378,23 +378,25 @@ main {
   background: var(--line);
 }
 
-.range-field {
+.option-field {
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
 
-.range-field > div {
+.option-field > div {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
   gap: 3px;
   padding: 3px;
   border-radius: 9px;
   background: #0a0d14;
 }
 
-.range-field button {
+.interval-field > div { grid-template-columns: repeat(4, 1fr); }
+.range-field > div { grid-template-columns: repeat(6, 1fr); }
+
+.option-field button {
   min-width: 40px;
   height: 29px;
   border: 0;
@@ -406,14 +408,21 @@ main {
   font-weight: 700;
 }
 
-.range-field button:hover {
+.option-field button:hover:not(:disabled) {
   color: #b8bdc8;
 }
 
-.range-field button.active {
+.option-field button.active {
   color: #eae8ff;
   background: rgba(139, 124, 255, 0.16);
   box-shadow: inset 0 0 0 1px rgba(139, 124, 255, 0.16);
+}
+
+.option-field button:disabled {
+  color: #343a46;
+  cursor: not-allowed;
+  text-decoration: line-through;
+  text-decoration-color: #454c59;
 }
 
 .capital-field strong,
@@ -1371,7 +1380,7 @@ main {
 }
 
 @media (max-width: 1180px) {
-  .runbar { grid-template-columns: minmax(130px,.7fr) 1px minmax(275px,1.4fr) 1px minmax(105px,.65fr) auto; }
+  .runbar { grid-template-columns: minmax(120px,.6fr) 1px minmax(180px,.9fr) 1px minmax(260px,1.3fr) 1px minmax(100px,.55fr) auto; }
   .cost-field, .runbar > .capital-field + .divider { display: none; }
   .metric-card > small { display: none; }
   .chart-adjustment { display: none !important; }
@@ -1383,7 +1392,7 @@ main {
   .topbar { grid-template-columns: 1fr auto; padding: 0 20px; }
   .topbar-center { display: none; }
   main { padding: 24px 20px; }
-  .runbar { grid-template-columns: 1fr 1.8fr auto; gap: 12px; }
+  .runbar { grid-template-columns: minmax(110px,.7fr) minmax(175px,1fr) minmax(250px,1.5fr) auto; gap: 12px; }
   .runbar .divider, .capital-field, .cost-field { display: none; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .trade-indicator { grid-template-columns: minmax(170px, .65fr) minmax(0, 1.35fr); }
@@ -1404,8 +1413,9 @@ main {
   .page-heading p { max-width: 310px; line-height: 1.5; }
   .run-meta { display: none; }
   .runbar { padding: 12px; grid-template-columns: 1fr; }
-  .range-field { order: 2; }
-  .run-button { order: 3; width: 100%; }
+  .interval-field { order: 2; }
+  .range-field { order: 3; }
+  .run-button { order: 4; width: 100%; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .metric-card { min-height: 70px; padding: 11px; }
   .metric-card.feature { grid-column: 1 / -1; }

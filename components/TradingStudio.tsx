@@ -30,10 +30,17 @@ import {
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { calculateBuyAndHold, runBacktest } from "@/lib/backtest";
 import { deriveCurrentSignal } from "@/lib/current-signal";
+import {
+  INTERVAL_OPTIONS,
+  RANGE_OPTIONS,
+  isRangeSupported,
+  nearestSupportedRange,
+} from "@/lib/market-options";
 import { BLANK_STRATEGY, DEFAULT_STRATEGIES, STRATEGY_COLORS } from "@/lib/strategies";
 import { executeStrategy } from "@/lib/strategy-runner";
 import type {
   BacktestResult,
+  IntervalKey,
   MarketDataResponse,
   RangeKey,
   RunSettings,
@@ -43,9 +50,35 @@ import PerformanceChart from "./PerformanceChart";
 import ResultsTable from "./ResultsTable";
 import TradeIndicator from "./TradeIndicator";
 
-const RANGES: RangeKey[] = ["1M", "3M", "6M", "1Y", "3Y", "5Y"];
-
 const percent = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+
+function formatMarketTimestamp(
+  value: string,
+  interval: IntervalKey,
+  timeZone?: string,
+) {
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? `${value}T12:00:00Z`
+    : value;
+  const options: Intl.DateTimeFormatOptions = interval === "1d"
+    ? { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }
+    : {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: timeZone || "UTC",
+        timeZoneName: "short",
+      };
+
+  try {
+    return new Intl.DateTimeFormat("en-US", options).format(new Date(timestamp));
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" })
+      .format(new Date(timestamp));
+  }
+}
 
 function isStrategyList(value: unknown): value is StrategyDefinition[] {
   return Array.isArray(value) && value.every((item) => {
@@ -280,7 +313,7 @@ function EditorModal({
         </div>
 
         <footer className="editor-footer">
-          <p><Info size={14} /> Use only current/past bars for each signal; fills occur at the next session&apos;s open.</p>
+          <p><Info size={14} /> Use only current/past bars for each signal; fills occur at the next bar&apos;s open.</p>
           <div>
             <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
             <button type="button" className="button primary" disabled={!draft.name.trim() || !draft.code.trim()} onClick={onSave}>
@@ -303,6 +336,8 @@ export default function TradingStudio() {
   const [activeSymbol, setActiveSymbol] = useState("AAPL");
   const [range, setRange] = useState<RangeKey>("1Y");
   const [activeRange, setActiveRange] = useState<RangeKey>("1Y");
+  const [interval, setInterval] = useState<IntervalKey>("1d");
+  const [activeInterval, setActiveInterval] = useState<IntervalKey>("1d");
   const [settings] = useState<RunSettings>({ startingCapital: 10_000, feePct: 0, slippagePct: 0 });
   const [market, setMarket] = useState<MarketDataResponse | null>(null);
   const [results, setResults] = useState<BacktestResult[]>([]);
@@ -315,6 +350,8 @@ export default function TradingStudio() {
   const [needsRun, setNeedsRun] = useState(false);
   const [toast, setToast] = useState("");
   const [strategyQuery, setStrategyQuery] = useState("");
+  const selectedIntervalOption = INTERVAL_OPTIONS.find((option) => option.key === interval)!;
+  const activeIntervalOption = INTERVAL_OPTIONS.find((option) => option.key === activeInterval)!;
   const currency = market?.meta.currency || "USD";
   const wholeMoney = useMemo(() => new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -373,7 +410,11 @@ export default function TradingStudio() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const runAll = useCallback(async (ticker = symbol, selectedRange = range) => {
+  const runAll = useCallback(async (
+    ticker = symbol,
+    selectedRange = range,
+    selectedInterval = interval,
+  ) => {
     const cleanSymbol = ticker.trim().toUpperCase();
     if (!cleanSymbol) {
       setRunError("Enter a ticker symbol before running the backtest.");
@@ -387,7 +428,7 @@ export default function TradingStudio() {
     setRunning(true);
     setRunError("");
     try {
-      const response = await fetch(`/api/market?symbol=${encodeURIComponent(cleanSymbol)}&range=${selectedRange}`, {
+      const response = await fetch(`/api/market?symbol=${encodeURIComponent(cleanSymbol)}&range=${selectedRange}&interval=${selectedInterval}`, {
         signal: controller.signal,
       });
       const payload = await response.json();
@@ -409,6 +450,7 @@ export default function TradingStudio() {
       setResults(nextResults);
       setActiveSymbol(nextMarket.symbol);
       setActiveRange(selectedRange);
+      setActiveInterval(nextMarket.interval);
       setSymbol(nextMarket.symbol);
       setLastRunAt(new Date());
       setNeedsRun(false);
@@ -424,7 +466,7 @@ export default function TradingStudio() {
         setRunning(false);
       }
     }
-  }, [range, selectedId, settings, strategies, symbol]);
+  }, [interval, range, selectedId, settings, strategies, symbol]);
 
   const selectedBars = useMemo(
     () => market?.bars.filter((bar) => bar.date >= market.periodStart) ?? [],
@@ -464,6 +506,13 @@ export default function TradingStudio() {
   function submitRun(event: FormEvent) {
     event.preventDefault();
     void runAll();
+  }
+
+  function selectInterval(nextInterval: IntervalKey) {
+    cancelRun();
+    setInterval(nextInterval);
+    setRange((current) => nearestSupportedRange(nextInterval, current));
+    setNeedsRun(true);
   }
 
   function openEditor(strategy: StrategyDefinition) {
@@ -554,7 +603,13 @@ export default function TradingStudio() {
             <button type="button" className="topnav active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><FlaskConical size={15} /> Backtest</button>
             <button type="button" className="topnav" onClick={() => document.querySelector(".strategies-panel")?.scrollIntoView({ behavior: "smooth" })}><Layers3 size={15} /> Algorithms <span>{strategies.length}</span></button>
           </div>
-          <div className="data-status"><span /><Database size={14} /> Adjusted daily data</div>
+          <div className="data-status">
+            <span />
+            <Database size={14} />
+            {market
+              ? `${market.meta.adjusted ? "Adjusted" : "Raw"} ${activeIntervalOption.label.toLowerCase()} data`
+              : "Daily + intraday data"}
+          </div>
         </header>
 
         <main>
@@ -579,12 +634,46 @@ export default function TradingStudio() {
               <div><Search size={17} /><input value={symbol} onChange={(event) => { cancelRun(); setSymbol(event.target.value.toUpperCase()); setNeedsRun(true); }} placeholder="AAPL" maxLength={15} /></div>
             </label>
             <div className="divider" />
-            <fieldset className="range-field">
+            <fieldset className="option-field interval-field">
+              <legend>Interval</legend>
+              <div>
+                {INTERVAL_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    aria-label={`${option.label} candles`}
+                    aria-pressed={interval === option.key}
+                    className={interval === option.key ? "active" : ""}
+                    onClick={() => selectInterval(option.key)}
+                  >
+                    {option.shortLabel}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <div className="divider" />
+            <fieldset className="option-field range-field">
               <legend>Duration</legend>
               <div>
-                {RANGES.map((option) => (
-                  <button key={option} type="button" aria-pressed={range === option} className={range === option ? "active" : ""} onClick={() => { cancelRun(); setRange(option); setNeedsRun(true); }}>{option}</button>
-                ))}
+                {RANGE_OPTIONS.map((option) => {
+                  const supported = isRangeSupported(interval, option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      aria-label={supported
+                        ? `${option.label} duration`
+                        : `${option.label} duration unavailable for ${selectedIntervalOption.label.toLowerCase()} candles`}
+                      aria-pressed={range === option.key}
+                      className={range === option.key ? "active" : ""}
+                      disabled={!supported}
+                      title={supported ? undefined : `${option.label} is unavailable for ${selectedIntervalOption.label.toLowerCase()} candles.`}
+                      onClick={() => { cancelRun(); setRange(option.key); setNeedsRun(true); }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
             <div className="divider" />
@@ -635,8 +724,10 @@ export default function TradingStudio() {
             </article>
             <article className="metric-card">
               <div className="metric-icon blue"><CalendarDays size={18} /></div>
-              <div><span>Market window</span><strong>{selectedBars.length ? `${selectedBars.length} sessions` : "—"}</strong></div>
-              <small>{activeRange} · Daily candles</small>
+              <div><span>Market window</span><strong>{selectedBars.length ? `${selectedBars.length} bars` : "—"}</strong></div>
+              <small>
+                {market ? activeRange : range} · {market ? activeIntervalOption.label : selectedIntervalOption.label} candles
+              </small>
             </article>
           </section>
 
@@ -644,9 +735,11 @@ export default function TradingStudio() {
             <TradeIndicator
               currency={currency}
               indicator={currentSignal}
+              interval={market ? activeInterval : interval}
               range={market ? activeRange : range}
               strategy={selectedStrategy}
               symbol={market ? activeSymbol : symbol.trim().toUpperCase() || "Ticker"}
+              timeZone={market?.meta.timezone}
             />
           )}
 
@@ -723,9 +816,11 @@ export default function TradingStudio() {
                   selectedId={selectedId}
                   benchmark={benchmark}
                   currency={currency}
+                  interval={market ? activeInterval : interval}
+                  timeZone={market?.meta.timezone}
                 />
                 {!market && !running && <div className="chart-empty"><TrendingUp size={28} /><strong>Your comparison will appear here</strong><span>Choose a ticker, then run every enabled algorithm.</span></div>}
-                {running && <div className="chart-loading"><LoaderCircle className="spin" size={26} /><strong>Running your strategy set</strong><span>Loading daily prices and evaluating signals…</span></div>}
+                {running && <div className="chart-loading"><LoaderCircle className="spin" size={26} /><strong>Running your strategy set</strong><span>Loading {selectedIntervalOption.label.toLowerCase()} prices and evaluating signals…</span></div>}
               </section>
 
               <section className="results-panel panel">
@@ -767,9 +862,9 @@ export default function TradingStudio() {
                       {selectedResult.signals.slice().reverse().map((signal) => (
                         <tr key={signal.id}>
                           <td><span className={`signal-type ${signal.type.toLowerCase()}`}>{signal.type === "BUY" ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{signal.type}</span></td>
-                          <td>{new Date(`${signal.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td>
+                          <td><time dateTime={signal.date}>{formatMarketTimestamp(signal.date, activeInterval, market?.meta.timezone)}</time></td>
                           <td className="mono">{preciseMoney.format(signal.price)}</td>
-                          <td>{signal.fillDate ? new Date(`${signal.fillDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</td>
+                          <td>{signal.fillDate ? <time dateTime={signal.fillDate}>{formatMarketTimestamp(signal.fillDate, activeInterval, market?.meta.timezone)}</time> : "—"}</td>
                           <td className="mono">{signal.fillPrice ? preciseMoney.format(signal.fillPrice) : "—"}</td>
                           <td className="reason-cell">{signal.reason || "Custom condition met"}</td>
                           <td><span className={`status ${signal.status.toLowerCase()}`}>{signal.status}</span></td>
