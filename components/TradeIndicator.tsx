@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 
 import type { CurrentSignalState } from "@/lib/current-signal";
-import type { IntervalKey, RangeKey, StrategyDefinition } from "@/lib/types";
+import { derivePriceTarget } from "@/lib/price-target";
+import type { IntervalKey, PriceBar, RangeKey, StrategyDefinition } from "@/lib/types";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -22,6 +23,7 @@ const INTERVAL_LABELS: Record<IntervalKey, string> = {
 };
 
 interface TradeIndicatorProps {
+  bars: PriceBar[];
   currency: string;
   indicator: CurrentSignalState;
   interval: IntervalKey;
@@ -72,6 +74,7 @@ function formatDate(
 }
 
 export default function TradeIndicator({
+  bars,
   currency,
   indicator,
   interval,
@@ -145,12 +148,8 @@ export default function TradeIndicator({
 
   const asOf = formatDate(indicator.asOf, interval, timeZone);
   const triggerPrice = indicator.signal?.price;
-  const waitingTarget = indicator.status === "READY"
-    ? indicator.action === "WAIT"
-      ? "BUY"
-      : indicator.action === "HOLD"
-        ? "SELL"
-        : null
+  const priceTarget = indicator.status === "READY"
+    ? derivePriceTarget(strategy, bars, indicator.action)
     : null;
 
   return (
@@ -167,9 +166,9 @@ export default function TradeIndicator({
         <div>
           <span>Selected algorithm signal</span>
           <strong>{badge}</strong>
-          {waitingTarget && (
+          {priceTarget && (
             <span className="trade-indicator__target">
-              Target: <b>{waitingTarget}</b>
+              Target: <b>{priceTarget.action} if close {priceTarget.comparison} {money.format(priceTarget.price)}</b>
             </span>
           )}
         </div>

@@ -1,5 +1,7 @@
 import type { StrategyDefinition } from "./types";
 
+export type BuiltInStrategyKind = "SMA_CROSS" | "RSI_REVERSAL" | "CHANNEL_BREAKOUT";
+
 const SMA_CROSS = `function strategy(bars, helpers) {
   const closes = bars.map((bar) => bar.close);
   const fast = helpers.sma(closes, 20);
@@ -49,6 +51,13 @@ const BREAKOUT = `function strategy(bars, helpers) {
   }
   return signals;
 }`;
+
+export function getBuiltInStrategyKind(code: string): BuiltInStrategyKind | null {
+  if (code === SMA_CROSS) return "SMA_CROSS";
+  if (code === RSI_REVERSAL) return "RSI_REVERSAL";
+  if (code === BREAKOUT) return "CHANNEL_BREAKOUT";
+  return null;
+}
 
 export const STRATEGY_COLORS = [
   "#8b7cff",

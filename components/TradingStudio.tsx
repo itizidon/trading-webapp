@@ -733,6 +733,7 @@ export default function TradingStudio() {
 
           {selectedStrategy && (
             <TradeIndicator
+              bars={selectedBars}
               currency={currency}
               indicator={currentSignal}
               interval={market ? activeInterval : interval}
