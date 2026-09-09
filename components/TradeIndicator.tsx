@@ -145,6 +145,13 @@ export default function TradeIndicator({
 
   const asOf = formatDate(indicator.asOf, interval, timeZone);
   const triggerPrice = indicator.signal?.price;
+  const waitingTarget = indicator.status === "READY"
+    ? indicator.action === "WAIT"
+      ? "BUY"
+      : indicator.action === "HOLD"
+        ? "SELL"
+        : null
+    : null;
 
   return (
     <section
@@ -160,6 +167,11 @@ export default function TradeIndicator({
         <div>
           <span>Selected algorithm signal</span>
           <strong>{badge}</strong>
+          {waitingTarget && (
+            <span className="trade-indicator__target">
+              Target: <b>{waitingTarget}</b>
+            </span>
+          )}
         </div>
       </div>
 

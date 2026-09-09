@@ -656,6 +656,8 @@ main {
 .trade-indicator__action > div { gap: 4px; }
 .trade-indicator__action span:not(.trade-indicator__icon) { color: #687180; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .trade-indicator__action strong { color: var(--indicator-color); font-size: 18px; line-height: 1; letter-spacing: .04em; }
+.trade-indicator__action .trade-indicator__target { letter-spacing: .04em; }
+.trade-indicator__target b { color: #cbd1da; }
 .trade-indicator__copy { gap: 5px; }
 .trade-indicator__copy strong { color: #e2e5eb; font-size: 12px; }
 .trade-indicator__copy span { max-width: 620px; color: #747d8b; font-size: 9px; line-height: 1.5; }
